@@ -1,0 +1,29 @@
+[package]
+name = "video-test"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+egui-wgpu = "0.33"
+egui = "0.33"
+egui-winit = "0.33"
+
+tokio = {version = "1.53", features = ["rt", "rt-multi-thread", "fs", "sync", "macros", "time"]}
+tokio-util = "0.7"
+
+ctrlc = "3.5.2"
+
+rfd = "0.17"
+
+pin-project-lite = "0.2"
+
+atom-parser = { git = "https://github.com/w-utter/atom-parser", features = ["std"] }
+quicktime_2001 = { git = "https://github.com/w-utter/atom-parser", features = ["std"] }
+tokio-stream = "0.1"
+
+atomic_enum = "0.3"
+atomic_float = "1.1"
+
+# TODO: fork egui-timeline-widget to bump egui versions
+egui-timeline-widget = { path = "../egui-timeline-widget" }
