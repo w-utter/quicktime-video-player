@@ -25,5 +25,4 @@ tokio-stream = "0.1"
 atomic_enum = "0.3"
 atomic_float = "1.1"
 
-# TODO: fork egui-timeline-widget to bump egui versions
-egui-timeline-widget = { path = "../egui-timeline-widget" }
+egui-timeline-widget = { git = "https://github.com/w-utter/egui-timeline-widget.git", branch = "egui-0.33"}
