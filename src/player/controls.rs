@@ -1,8 +1,8 @@
-use tokio::sync::mpsc::{Sender, UnboundedReceiver};
-use tokio::sync::Notify;
-use std::sync::Arc;
-use core::num::NonZeroIsize;
 use super::OneshotTimer;
+use core::num::NonZeroIsize;
+use std::sync::Arc;
+use tokio::sync::Notify;
+use tokio::sync::mpsc::{Sender, UnboundedReceiver};
 
 pub enum PlayerRequest {
     Position(core::time::Duration),
@@ -28,11 +28,15 @@ pub enum PlayerAction {
 }
 
 // TODO: need a separate thing for audio
-pub async fn controls_task(time_granularity: core::time::Duration, mut controls: UnboundedReceiver<PlayerRequest>, bounded_controls: Sender<PlayerAction>, shutdown: tokio_util::sync::CancellationToken) {
+pub async fn controls_task(
+    time_granularity: core::time::Duration,
+    mut controls: UnboundedReceiver<PlayerRequest>,
+    bounded_controls: Sender<PlayerAction>,
+    shutdown: tokio_util::sync::CancellationToken,
+) {
     // also need a way to get responses back from the player
     // e.g, update the current time
     //  - this could just be atomicu64 for nanos
-
 
     // the only purpose of this task is
     // - delegate controls sent from the ui and turn them into something that
@@ -45,14 +49,13 @@ pub async fn controls_task(time_granularity: core::time::Duration, mut controls:
     //          - decode error/dropped frame
     //          - set the play state to paused when the video ends
 
-
     // for the actual decoding
     // - one task for demuxing the container
     // - one task for decoding the frames per track
 
     // preferrably, this module would be its own lib
     // - such that any ui can use this in the future
-    // - then the output should be a sender to a 
+    // - then the output should be a sender to a
 
     // NOTE: communicating directly with the container, which then distributes that to all tracks
     // is prob better than trying to talk to the tracks directly
@@ -108,7 +111,7 @@ pub async fn controls_task(time_granularity: core::time::Duration, mut controls:
                 core::time::Duration::ZERO
             }
         });
-        
+
         tokio::select! {
             _ = shutdown.cancelled() => {
                 break;

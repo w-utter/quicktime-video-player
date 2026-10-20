@@ -1,9 +1,9 @@
-pub mod controls;
 pub mod container;
+pub mod controls;
 
-use tokio::sync::Notify;
 use std::sync::Arc;
-use tokio::sync::mpsc::{UnboundedReceiver};
+use tokio::sync::Notify;
+use tokio::sync::mpsc::UnboundedReceiver;
 
 #[atomic_enum::atomic_enum]
 pub enum PlayState {
@@ -20,11 +20,14 @@ pub struct PlayerState {
 pub struct Player {
     shutdown: tokio_util::sync::CancellationToken,
     pub metadata: container::Metadata,
-    state: Arc<PlayerState>
+    state: Arc<PlayerState>,
 }
 
 impl Player {
-    pub async fn new(path: &std::path::Path, player_controls: UnboundedReceiver<controls::PlayerRequest>) -> Self {
+    pub async fn new(
+        path: &std::path::Path,
+        player_controls: UnboundedReceiver<controls::PlayerRequest>,
+    ) -> Self {
         let shutdown = tokio_util::sync::CancellationToken::new();
         let (bounded_controls_tx, bounded_controls_rx) = tokio::sync::mpsc::channel(32);
         // TODO: move state handling to the container task
@@ -37,8 +40,20 @@ impl Player {
             play_speed: atomic_float::AtomicF64::new(1.0),
         });
 
-        let metadata = container::container_task(container::Container::Mov, path, state.clone(), bounded_controls_rx, shutdown.clone()).await;
-        tokio::task::spawn(controls::controls_task(metadata.time_granularity, player_controls, bounded_controls_tx, shutdown.clone()));
+        let metadata = container::container_task(
+            container::Container::Mov,
+            path,
+            state.clone(),
+            bounded_controls_rx,
+            shutdown.clone(),
+        )
+        .await;
+        tokio::task::spawn(controls::controls_task(
+            metadata.time_granularity,
+            player_controls,
+            bounded_controls_tx,
+            shutdown.clone(),
+        ));
         Self {
             shutdown,
             metadata,
@@ -51,11 +66,16 @@ impl Player {
     }
 
     pub fn play_speed(&self) -> f64 {
-        self.state.play_speed.load(std::sync::atomic::Ordering::Relaxed)
+        self.state
+            .play_speed
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn time(&self) -> core::time::Duration {
-        let ns = self.state.time_ns.load(std::sync::atomic::Ordering::Relaxed);
+        let ns = self
+            .state
+            .time_ns
+            .load(std::sync::atomic::Ordering::Relaxed);
         core::time::Duration::from_nanos(ns)
     }
 

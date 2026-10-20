@@ -1,13 +1,18 @@
-use tokio::sync::Notify;
-use std::sync::Arc;
-use tokio::sync::mpsc::Receiver;
-use crate::player::controls::PlayerAction;
+use super::super::OneshotTimer;
 use super::{Metadata, TrackChannels};
 use super::{TrackAction, TrackResponse, UnsupportedTrackError};
-use super::super::{OneshotTimer};
-pub use crate::player::{PlayerState, PlayState};
+use crate::player::controls::PlayerAction;
+pub use crate::player::{PlayState, PlayerState};
+use std::sync::Arc;
+use tokio::sync::Notify;
+use tokio::sync::mpsc::Receiver;
 
-pub async fn container_task(path: &std::path::Path, state: Arc<PlayerState>, controls: Receiver<PlayerAction>, shutdown: tokio_util::sync::CancellationToken) -> Metadata {
+pub async fn container_task(
+    path: &std::path::Path,
+    state: Arc<PlayerState>,
+    controls: Receiver<PlayerAction>,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> Metadata {
     // the suppl task should parse the immediate metadata and store relavant info,
     // then spawn a looping task to handle decoding frames
     //  - this is so that a player for a given video has to get the metadata before being fully
@@ -33,7 +38,10 @@ pub async fn container_task(path: &std::path::Path, state: Arc<PlayerState>, con
         } = mov;
 
         use std::collections::BTreeMap;
-        let mut track_map = tracks.into_iter().map(|track| (track.header.track_id, ActiveTrack { track, next: None })).collect::<BTreeMap<_, _>>();
+        let mut track_map = tracks
+            .into_iter()
+            .map(|track| (track.header.track_id, ActiveTrack { track, next: None }))
+            .collect::<BTreeMap<_, _>>();
 
         let mut open_track_map = std::collections::BTreeMap::<u32, CodecTaskHandle>::new();
 
@@ -53,14 +61,29 @@ pub async fn container_task(path: &std::path::Path, state: Arc<PlayerState>, con
 
                 for (track_id, track) in &mut track_map {
                     match (&mut track.next, open_track_map.get_mut(track_id)) {
-                        (Some(TrackDisplayInfo { id, time } ), Some(handle)) => {
+                        (Some(TrackDisplayInfo { id, time }), Some(handle)) => {
                             if time.saturating_sub(current_time) <= time_granularity {
                                 if let Some(buffer) = handle.frame_buffer.remove(id) {
-                                    let Ok(_) = handle.display_out.send(crate::player::container::DisplayBuffer { bytes: buffer }).await else {
+                                    let Ok(_) = handle
+                                        .display_out
+                                        .send(crate::player::container::DisplayBuffer {
+                                            bytes: buffer,
+                                        })
+                                        .await
+                                    else {
                                         break;
                                     };
                                 }
-                                track.next = track.track.get_next_frame_info_from_time(&current_time, &mut reader, &opts, &header).await.unwrap();
+                                track.next = track
+                                    .track
+                                    .get_next_frame_info_from_time(
+                                        &current_time,
+                                        &mut reader,
+                                        &opts,
+                                        &header,
+                                    )
+                                    .await
+                                    .unwrap();
                                 if let Some(next) = track.next.as_ref() {
                                     if let Some(time) = &requested_time {
                                         requested_time = Some(core::cmp::min(*time, next.time));
@@ -71,7 +94,18 @@ pub async fn container_task(path: &std::path::Path, state: Arc<PlayerState>, con
                                     if handle.frame_buffer.contains_key(&next.id) {
                                         continue;
                                     }
-                                    let offset = track.track.sample_to_chunk.get_frame_offset_async(next.id, &track.track.chunk_offset, &track.track.sample_size, &mut reader, &opts).await.unwrap();
+                                    let offset = track
+                                        .track
+                                        .sample_to_chunk
+                                        .get_frame_offset_async(
+                                            next.id,
+                                            &track.track.chunk_offset,
+                                            &track.track.sample_size,
+                                            &mut reader,
+                                            &opts,
+                                        )
+                                        .await
+                                        .unwrap();
                                     let extent = data.from_offset_32(offset).unwrap();
                                     handle.raw_frame_in.send((extent, next.id)).await.unwrap();
                                 }
@@ -87,7 +121,7 @@ pub async fn container_task(path: &std::path::Path, state: Arc<PlayerState>, con
                     }
                 }
 
-                // if no tracks are requested, 
+                // if no tracks are requested,
                 // or if they are all finished playing then idle
                 // otherwise wait for the minimum amount of time until
                 // the next frame
@@ -171,7 +205,7 @@ pub async fn container_task(path: &std::path::Path, state: Arc<PlayerState>, con
                                     if let Err(_) = track_res_tx.send(response).await {
                                         return;
                                     }
-                                } 
+                                }
                             }
                         }
                     }
@@ -279,7 +313,7 @@ impl Drop for CodecTaskHandle {
     }
 }
 
-// TODO: 
+// TODO:
 // - its buffered by the container
 // - use two separate channels for send / completed frames
 //
@@ -293,14 +327,19 @@ impl Drop for CodecTaskHandle {
 //          - audio
 //              - raw
 //              - opus
-fn create_codec_task_from_track<O>(track: &Track<O>, mut reader: atom_parser::AsyncFileReader<Arc<std::fs::File>, BUFFER_SIZE>, display_out: tokio::sync::mpsc::Sender<super::DisplayBuffer>, shutdown: tokio_util::sync::CancellationToken) -> Result<CodecTaskHandle, UnsupportedTrackError> {
-    use quicktime_2001::{TrackKind, AudioTrack, VideoTrack};
+fn create_codec_task_from_track<O>(
+    track: &Track<O>,
+    mut reader: atom_parser::AsyncFileReader<Arc<std::fs::File>, BUFFER_SIZE>,
+    display_out: tokio::sync::mpsc::Sender<super::DisplayBuffer>,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> Result<CodecTaskHandle, UnsupportedTrackError> {
+    use quicktime_2001::{AudioTrack, TrackKind, VideoTrack};
     Ok(match &track.kind {
         TrackKind::Audio(AudioTrack { entries }) => {
             let entry = entries.first().unwrap();
             use quicktime_2001::AudioCodec;
             match &entry.codec {
-                _ => return Err(UnsupportedTrackError::UnsupportedCodec)
+                _ => return Err(UnsupportedTrackError::UnsupportedCodec),
             }
         }
         TrackKind::Video(VideoTrack { entries }) => {
@@ -357,7 +396,6 @@ fn create_codec_task_from_track<O>(track: &Track<O>, mut reader: atom_parser::As
     })
 }
 
-
 #[derive(Debug)]
 struct Track<O> {
     pub kind: quicktime_2001::TrackKind<O>,
@@ -368,12 +406,20 @@ struct Track<O> {
     pub header: quicktime_2001::tkhd::v0::TrackHeaderV0<O>,
 }
 
-impl <O: atom_parser::Offset + Unpin> Track<O> {
+impl<O: atom_parser::Offset + Unpin> Track<O> {
     // TODO: something simiilar for going backwards
-    async fn get_next_frame_info_from_id<R: atom_parser::AsyncReader<O>>(&self, id: u32, mut reader: R, opts: &atom_parser::ParseOptions, movie_header: &quicktime_2001::mvhd::v0::MovieHeaderV0<O>) -> Result<Option<TrackDisplayInfo>, atom_parser::ParseError> {
+    async fn get_next_frame_info_from_id<R: atom_parser::AsyncReader<O>>(
+        &self,
+        id: u32,
+        mut reader: R,
+        opts: &atom_parser::ParseOptions,
+        movie_header: &quicktime_2001::mvhd::v0::MovieHeaderV0<O>,
+    ) -> Result<Option<TrackDisplayInfo>, atom_parser::ParseError> {
         let mut time = 0;
         let mut sample_count = 0;
-        let mut time_to_sample_iter = self.time_to_sample.time_to_sample_table_async(&mut reader, opts);
+        let mut time_to_sample_iter = self
+            .time_to_sample
+            .time_to_sample_table_async(&mut reader, opts);
 
         use tokio_stream::StreamExt;
         while let Some(entry) = time_to_sample_iter.next().await {
@@ -385,17 +431,25 @@ impl <O: atom_parser::Offset + Unpin> Track<O> {
                     return Ok(Some(TrackDisplayInfo {
                         id: sample_count,
                         time: movie_header.duration_from_step(time),
-                    }))
+                    }));
                 }
             }
         }
         Ok(None)
     }
 
-    async fn get_next_frame_info_from_time<R: atom_parser::AsyncReader<O>>(&self, current_time: &core::time::Duration, mut reader: R, opts: &atom_parser::ParseOptions, movie_header: &quicktime_2001::mvhd::v0::MovieHeaderV0<O>) -> Result<Option<TrackDisplayInfo>, atom_parser::ParseError> {
+    async fn get_next_frame_info_from_time<R: atom_parser::AsyncReader<O>>(
+        &self,
+        current_time: &core::time::Duration,
+        mut reader: R,
+        opts: &atom_parser::ParseOptions,
+        movie_header: &quicktime_2001::mvhd::v0::MovieHeaderV0<O>,
+    ) -> Result<Option<TrackDisplayInfo>, atom_parser::ParseError> {
         let mut time = 0;
         let mut sample_count = 0;
-        let mut time_to_sample_iter = self.time_to_sample.time_to_sample_table_async(&mut reader, opts);
+        let mut time_to_sample_iter = self
+            .time_to_sample
+            .time_to_sample_table_async(&mut reader, opts);
 
         use tokio_stream::StreamExt;
         while let Some(entry) = time_to_sample_iter.next().await {
@@ -409,17 +463,25 @@ impl <O: atom_parser::Offset + Unpin> Track<O> {
                     return Ok(Some(TrackDisplayInfo {
                         id: sample_count,
                         time: movie_header.duration_from_step(time),
-                    }))
+                    }));
                 }
             }
         }
         Ok(None)
     }
 
-    async fn get_current_frame_info_from_time<R: atom_parser::AsyncReader<O>>(&self, current_time: &core::time::Duration, mut reader: R, opts: &atom_parser::ParseOptions, movie_header: &quicktime_2001::mvhd::v0::MovieHeaderV0<O>) -> Result<Option<TrackDisplayInfo>, atom_parser::ParseError> {
+    async fn get_current_frame_info_from_time<R: atom_parser::AsyncReader<O>>(
+        &self,
+        current_time: &core::time::Duration,
+        mut reader: R,
+        opts: &atom_parser::ParseOptions,
+        movie_header: &quicktime_2001::mvhd::v0::MovieHeaderV0<O>,
+    ) -> Result<Option<TrackDisplayInfo>, atom_parser::ParseError> {
         let mut time = 0;
         let mut sample_count = 0;
-        let mut time_to_sample_iter = self.time_to_sample.time_to_sample_table_async(&mut reader, opts);
+        let mut time_to_sample_iter = self
+            .time_to_sample
+            .time_to_sample_table_async(&mut reader, opts);
 
         let mut current = None;
 
@@ -451,7 +513,7 @@ struct MovVideo<O> {
     tracks: Vec<Track<O>>,
 }
 
-// this is the frame to be displayed next  
+// this is the frame to be displayed next
 // e.g this would be 0 & 0s on initial load,
 // then 1 & 16ms with 60fps
 #[derive(Debug)]
@@ -471,7 +533,17 @@ struct ActiveTrack<O> {
 const BUFFER_SIZE: usize = 1024;
 
 // TODO: this should also return the tracks stuff as well
-async fn parse_metadata(path: &std::path::Path) -> (atom_parser::AsyncFileReader<std::sync::Arc<std::fs::File>, BUFFER_SIZE>, MovVideo<u64>, Metadata, (tokio::sync::mpsc::Receiver<TrackAction>, tokio::sync::mpsc::Sender<TrackResponse>)) {
+async fn parse_metadata(
+    path: &std::path::Path,
+) -> (
+    atom_parser::AsyncFileReader<std::sync::Arc<std::fs::File>, BUFFER_SIZE>,
+    MovVideo<u64>,
+    Metadata,
+    (
+        tokio::sync::mpsc::Receiver<TrackAction>,
+        tokio::sync::mpsc::Sender<TrackResponse>,
+    ),
+) {
     let mut r = {
         let file = tokio::fs::File::open(path).await.unwrap();
         let size = file.metadata().await.unwrap().len();
@@ -503,10 +575,8 @@ async fn parse_metadata(path: &std::path::Path) -> (atom_parser::AsyncFileReader
                         moov::Child::MovieHeader(hd) => {
                             movie_header = Some(hd);
                         }
-                        moov::Child::Clipping(clip) => {
-                        }
+                        moov::Child::Clipping(clip) => {}
                         moov::Child::Track(track) => {
-
                             let mut sample_description = None;
                             let mut time_to_sample = None;
                             let mut sample_sizes = None;
@@ -519,9 +589,7 @@ async fn parse_metadata(path: &std::path::Path) -> (atom_parser::AsyncFileReader
                                 let r = child_iter.reader();
 
                                 match child.unwrap() {
-                                    trak::Child::TrackHeader(hdr) => {
-                                        track_header = Some(hdr)
-                                    }
+                                    trak::Child::TrackHeader(hdr) => track_header = Some(hdr),
                                     trak::Child::Clipping(c) => (),
                                     trak::Child::TrackMatte(tm) => (),
                                     trak::Child::Edit(e) => {
@@ -537,19 +605,15 @@ async fn parse_metadata(path: &std::path::Path) -> (atom_parser::AsyncFileReader
                                                             .await
                                                             .unwrap();
                                                     }
-                                                    elst::EditListVersions::Unknown(v) => {
-                                                    }
+                                                    elst::EditListVersions::Unknown(v) => {}
                                                 },
                                                 edts::Child::Unsupported(..) => (),
                                             }
                                         }
                                     }
-                                    trak::Child::TrackReference(tref) => {
-                                    }
-                                    trak::Child::TrackLoadingSettings(tls) => {
-                                    }
-                                    trak::Child::TrackInputMap(tim) => {
-                                    }
+                                    trak::Child::TrackReference(tref) => {}
+                                    trak::Child::TrackLoadingSettings(tls) => {}
+                                    trak::Child::TrackInputMap(tim) => {}
                                     trak::Child::Media(m) => {
                                         let mut media_info = None;
                                         let mut handler_ref = None;
@@ -559,8 +623,7 @@ async fn parse_metadata(path: &std::path::Path) -> (atom_parser::AsyncFileReader
                                         while let Some(child) = child_iter.next().await {
                                             let r = child_iter.reader();
                                             match child.unwrap() {
-                                                mdia::Child::MediaHeader(h) => {
-                                                }
+                                                mdia::Child::MediaHeader(h) => {}
                                                 mdia::Child::HandlerReference(r) => {
                                                     if handler_ref.as_ref().is_some() {
                                                         panic!("duplicate handler refs");
@@ -580,7 +643,6 @@ async fn parse_metadata(path: &std::path::Path) -> (atom_parser::AsyncFileReader
                                                     }
                                                 }
                                                 mdia::Child::MediaInformation(info) => {
-
                                                     let DiscoveredMediaInformation {
                                                         kind,
                                                         data_information,
@@ -622,7 +684,6 @@ async fn parse_metadata(path: &std::path::Path) -> (atom_parser::AsyncFileReader
                                                     }
 
                                                     if let Some(stable) = sample_table {
-
                                                         let mut child_iter =
                                                             stable.children_async(r, &opts);
                                                         while let Some(child) =
@@ -978,11 +1039,9 @@ async fn parse_metadata(path: &std::path::Path) -> (atom_parser::AsyncFileReader
                                     }
                                     trak::Child::Userdata(udata) => {
                                         let mut child_iter = udata.children_async(r, &opts);
-                                        while let Some(child) = child_iter.next().await {
-                                        }
+                                        while let Some(child) = child_iter.next().await {}
                                     }
-                                    trak::Child::Unsupported(fcc) => {
-                                    }
+                                    trak::Child::Unsupported(fcc) => {}
                                 }
                             }
 
@@ -1005,7 +1064,6 @@ async fn parse_metadata(path: &std::path::Path) -> (atom_parser::AsyncFileReader
                                     quicktime_2001::tkhd::TrackHeaderVersions::V0(v0) => v0,
                                     _ => panic!(),
                                 };
-
 
                                 let time_to_sample = match time_to_sample.version {
                                     stts::TimeToSampleVersions::V0(stts) => stts,
@@ -1036,13 +1094,10 @@ async fn parse_metadata(path: &std::path::Path) -> (atom_parser::AsyncFileReader
                         }
                         moov::Child::Userdata(udta) => {
                             let mut child_iter = udta.children_async(r, &opts);
-                            while let Some(child) = child_iter.next().await {
-                            }
+                            while let Some(child) = child_iter.next().await {}
                         }
-                        moov::Child::ColorTable(ctb) => {
-                        }
-                        moov::Child::Unsupported(missed) => {
-                        }
+                        moov::Child::ColorTable(ctb) => {}
+                        moov::Child::Unsupported(missed) => {}
                         moov::Child::CompressedMovie(..) | moov::Child::ReferenceMovie(..) => (),
                     }
                 }
@@ -1065,9 +1120,10 @@ async fn parse_metadata(path: &std::path::Path) -> (atom_parser::AsyncFileReader
         data: movie_data.unwrap(),
         tracks,
     };
-    let time_granularity = core::time::Duration::from_nanos(1000000000 / (video.header.time_scale as u64));
+    let time_granularity =
+        core::time::Duration::from_nanos(1000000000 / (video.header.time_scale as u64));
 
-    // TODO: 
+    // TODO:
     // each video track has its own width + height ?
     // - like a channel is setup with a VideoTrackInfo { width: u32, height: u32, frames: tokio::mpsc::Receiver<DisplayBuffer<A>> }
     //   - need a way to configure which channels are selected without (preferrably) needing to have
@@ -1092,63 +1148,74 @@ async fn parse_metadata(path: &std::path::Path) -> (atom_parser::AsyncFileReader
 
     let duration = video.header.duration();
 
-    let tracks = video.tracks.iter().filter_map(|track| {
-        use quicktime_2001::{AudioTrack, VideoTrack};
-        Some(match &track.kind {
-            quicktime_2001::TrackKind::Audio(_) => {
-                crate::player::container::TrackKind::Audio(crate::player::container::Track {
-                    id: track.header.track_id,
-                    selected: false,
-                    kind: crate::player::container::track::Audio {
-                    }
-                })
-            }
-            quicktime_2001::TrackKind::Video(VideoTrack { entries }) => {
-                let entry = entries.first().unwrap();
-                crate::player::container::TrackKind::Video(crate::player::container::Track {
-                    id: track.header.track_id,
-                    selected: false,
-                    kind: crate::player::container::track::Video {
-                        width: entry.entry.description.width as _,
-                        height: entry.entry.description.height as _,
-                    }
-                })
-            }
+    let tracks = video
+        .tracks
+        .iter()
+        .filter_map(|track| {
+            use quicktime_2001::{AudioTrack, VideoTrack};
+            Some(match &track.kind {
+                quicktime_2001::TrackKind::Audio(_) => {
+                    crate::player::container::TrackKind::Audio(crate::player::container::Track {
+                        id: track.header.track_id,
+                        selected: false,
+                        kind: crate::player::container::track::Audio {},
+                    })
+                }
+                quicktime_2001::TrackKind::Video(VideoTrack { entries }) => {
+                    let entry = entries.first().unwrap();
+                    crate::player::container::TrackKind::Video(crate::player::container::Track {
+                        id: track.header.track_id,
+                        selected: false,
+                        kind: crate::player::container::track::Video {
+                            width: entry.entry.description.width as _,
+                            height: entry.entry.description.height as _,
+                        },
+                    })
+                }
+            })
         })
-    }).collect::<Vec<_>>();
+        .collect::<Vec<_>>();
 
     let (track_cmd_tx, track_cmd_rx) = tokio::sync::mpsc::channel(32);
     let (track_recv_tx, track_recv_rx) = tokio::sync::mpsc::channel(32);
 
-    (r, video, Metadata {
-        time_granularity,
-        duration,
-        tracks,
-        channels: Some(TrackChannels {
-            tx: track_cmd_tx,
-            rx: track_recv_rx,
-        })
-    }, (track_cmd_rx, track_recv_tx))
+    (
+        r,
+        video,
+        Metadata {
+            time_granularity,
+            duration,
+            tracks,
+            channels: Some(TrackChannels {
+                tx: track_cmd_tx,
+                rx: track_recv_rx,
+            }),
+        },
+        (track_cmd_rx, track_recv_tx),
+    )
 }
 
 struct OpenTracks<'a> {
     tracks: &'a mut std::collections::BTreeMap<u32, CodecTaskHandle>,
 }
 
-impl <'a> OpenTracks<'a> {
+impl<'a> OpenTracks<'a> {
     fn new(tracks: &'a mut std::collections::BTreeMap<u32, CodecTaskHandle>) -> Self {
-        Self {
-            tracks,
-        }
+        Self { tracks }
     }
 }
 
-impl <'a> Future for OpenTracks<'a> {
+impl<'a> Future for OpenTracks<'a> {
     type Output = ();
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
         let mut any_ready = false;
         for (_, track) in self.tracks.iter_mut() {
-            if let core::task::Poll::Ready(Some((buffer, id))) = std::pin::Pin::new(&mut track.decoded_frame_out).poll_recv(cx) {
+            if let core::task::Poll::Ready(Some((buffer, id))) =
+                std::pin::Pin::new(&mut track.decoded_frame_out).poll_recv(cx)
+            {
                 track.frame_buffer.insert(id, buffer);
                 any_ready = true;
             }
@@ -1161,4 +1228,3 @@ impl <'a> Future for OpenTracks<'a> {
         }
     }
 }
-

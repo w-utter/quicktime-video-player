@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use crate::app::GlobalState;
 use egui_wgpu::wgpu;
 use egui_winit::winit;
 use std::collections::HashMap;
-use crate::app::GlobalState;
+use std::sync::Arc;
 
 pub struct WgpuState {
     pub adapter: wgpu::Adapter,
@@ -130,7 +130,6 @@ pub struct UiWindow {
     repaint_delay: std::time::Duration,
 }
 
-
 impl UiWindow {
     fn id(&self) -> winit::window::WindowId {
         self.window.id()
@@ -141,7 +140,6 @@ impl UiWindow {
     }
 }
 
-
 pub struct WindowHandler<'a> {
     pub wgpu: WgpuState,
     pub proxy: winit::event_loop::EventLoopProxy<UserEvent>,
@@ -150,8 +148,13 @@ pub struct WindowHandler<'a> {
 }
 
 impl<'a> WindowHandler<'a> {
-    pub async fn new(global_state: GlobalState<'a>) -> (winit::event_loop::EventLoop<UserEvent>, Self) {
-        let event_loop: winit::event_loop::EventLoop<UserEvent> = winit::event_loop::EventLoop::with_user_event().build().unwrap();
+    pub async fn new(
+        global_state: GlobalState<'a>,
+    ) -> (winit::event_loop::EventLoop<UserEvent>, Self) {
+        let event_loop: winit::event_loop::EventLoop<UserEvent> =
+            winit::event_loop::EventLoop::with_user_event()
+                .build()
+                .unwrap();
         let proxy = event_loop.create_proxy();
 
         let backends = if cfg!(windows) {
@@ -215,7 +218,11 @@ impl<'a> WindowHandler<'a> {
         )
     }
 
-    fn ui_ctrl_flow(&mut self, ctrl: crate::app::UiRequest, event_loop: &winit::event_loop::ActiveEventLoop) {
+    fn ui_ctrl_flow(
+        &mut self,
+        ctrl: crate::app::UiRequest,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) {
     }
 }
 
@@ -229,9 +236,12 @@ impl<'a> winit::application::ApplicationHandler<UserEvent> for WindowHandler<'a>
 
         match cause {
             StartCause::Init => {
-                let window =
-                    self.wgpu
-                        .create_window(event_loop, crate::app::WindowKind::Main, None, &self.proxy);
+                let window = self.wgpu.create_window(
+                    event_loop,
+                    crate::app::WindowKind::Main,
+                    None,
+                    &self.proxy,
+                );
                 let id = window.id();
                 self.windows.insert(id, window);
             }
@@ -449,4 +459,3 @@ pub enum UserEvent {
     Exit,
     Ui(crate::app::UiRequest),
 }
-

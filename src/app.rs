@@ -1,14 +1,14 @@
 use std::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::player::container::{AudioTrack, ClosedTrack, Track, TrackRequest, VideoTrack, track};
 use crate::player::controls::PlayerRequest;
-use crate::player::container::{VideoTrack, AudioTrack, ClosedTrack, TrackRequest, Track, track};
 struct Player {
     player: crate::player::Player,
     ctrl: UnboundedSender<PlayerRequest>,
-    track_reqs: tokio::sync::mpsc::UnboundedSender<TrackRequest>, 
-    video_tracks: std::sync::mpsc::Receiver<(Track<track::Video>, Option<VideoTrack>)>, 
-    audio_tracks: std::sync::mpsc::Receiver<(Track<track::Audio>, Option<AudioTrack>)>, 
+    track_reqs: tokio::sync::mpsc::UnboundedSender<TrackRequest>,
+    video_tracks: std::sync::mpsc::Receiver<(Track<track::Video>, Option<VideoTrack>)>,
+    audio_tracks: std::sync::mpsc::Receiver<(Track<track::Audio>, Option<AudioTrack>)>,
     closed_tracks: std::sync::mpsc::Receiver<(u32, ClosedTrack)>,
     opened_video_tracks: Vec<(Track<track::Video>, DisplayedVideoTrack)>,
 
@@ -93,7 +93,7 @@ impl DisplayedVideoTrack {
                             },
                             size,
                         );
-                        
+
                         let repaint_info = egui::RequestRepaintInfo {
                             viewport_id: egui::ViewportId::ROOT,
                             delay: std::time::Duration::ZERO,
@@ -119,10 +119,7 @@ impl DisplayedVideoTrack {
             },
         );
 
-        Self {
-            texture,
-            id,
-        }
+        Self { texture, id }
     }
 }
 
@@ -130,7 +127,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub struct GlobalState<'a> {
     pub rt: &'a tokio::runtime::Runtime,
-    
+
     pub player: Option<Player>,
     pub player_tx: mpsc::Sender<Player>,
     pub player_rx: mpsc::Receiver<Player>,
@@ -146,7 +143,7 @@ pub struct GlobalState<'a> {
     pub remove_tracks_rx: mpsc::Receiver<u32>,
 }
 
-impl <'a> GlobalState<'a> {
+impl<'a> GlobalState<'a> {
     pub fn new(rt: &'a tokio::runtime::Runtime) -> Self {
         let (player_tx, player_rx) = mpsc::channel();
         let (create_video_tracks_tx, create_video_tracks_rx) = mpsc::channel();
@@ -159,9 +156,9 @@ impl <'a> GlobalState<'a> {
             player_rx,
             inflight_tracks: Default::default(),
             display_tracks: Default::default(),
-            create_video_tracks_tx, 
+            create_video_tracks_tx,
             create_video_tracks_rx,
-            create_audio_tracks_tx, 
+            create_audio_tracks_tx,
             create_audio_tracks_rx,
             remove_tracks_tx,
             remove_tracks_rx,
@@ -173,15 +170,11 @@ pub enum WindowKind {
     Main,
 }
 
-pub struct WindowState {
-    
-}
+pub struct WindowState {}
 
 impl WindowState {
     pub fn from_window_kind(window_kind: WindowKind, ctx: &egui::Context) -> Self {
-        Self {
-
-        }
+        Self {}
     }
 
     pub fn update(
@@ -192,25 +185,26 @@ impl WindowState {
         renderer: &mut egui_wgpu::Renderer,
         proxy: &egui_winit::winit::event_loop::EventLoopProxy<crate::window::UserEvent>,
     ) -> Option<UiRequest> {
-        egui::CentralPanel::default()
-            .show(ctx, |ui| {
-                if ui.button("select video").clicked() {
-                    let player_tx = global_state.player_tx.clone();
-                    global_state.rt.spawn(async move {
-                        let file = rfd::AsyncFileDialog::new()
-                            .add_filter("video", &["mov", "mp4"])
-                            .pick_file()
-                            .await;
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if ui.button("select video").clicked() {
+                let player_tx = global_state.player_tx.clone();
+                global_state.rt.spawn(async move {
+                    let file = rfd::AsyncFileDialog::new()
+                        .add_filter("video", &["mov", "mp4"])
+                        .pick_file()
+                        .await;
 
-                        if let Some(file) = file {
-                            let path = file.path();
-                            let (ctrl_tx, ctrl_rx) = tokio::sync::mpsc::unbounded_channel();
-                            let mut player = crate::player::Player::new(path, ctrl_rx).await;
+                    if let Some(file) = file {
+                        let path = file.path();
+                        let (ctrl_tx, ctrl_rx) = tokio::sync::mpsc::unbounded_channel();
+                        let mut player = crate::player::Player::new(path, ctrl_rx).await;
 
-                            let track_task = core::mem::take(&mut player.metadata.channels).unwrap();
-                            let (track_reqs, video_tracks, audio_tracks, closed_tracks) = track_task.spawn_as_sync_task(player.shutdown_token());
+                        let track_task = core::mem::take(&mut player.metadata.channels).unwrap();
+                        let (track_reqs, video_tracks, audio_tracks, closed_tracks) =
+                            track_task.spawn_as_sync_task(player.shutdown_token());
 
-                            player_tx.send(Player {
+                        player_tx
+                            .send(Player {
                                 player,
                                 ctrl: ctrl_tx,
                                 track_reqs,
@@ -219,136 +213,149 @@ impl WindowState {
                                 closed_tracks,
                                 opened_video_tracks: vec![],
                                 was_playing_before_drag: None,
-                            }).unwrap();
-                        }
-                    });
+                            })
+                            .unwrap();
+                    }
+                });
+            }
+
+            if let Ok(player) = global_state.player_rx.try_recv() {
+                global_state.player = Some(player);
+            }
+
+            if let Some(player) = global_state.player.as_mut() {
+                if ui.button("next frame").is_pointer_button_down_on() {
+                    player.ctrl.send(PlayerRequest::NextFrame).unwrap();
                 }
 
-                if let Ok(player) = global_state.player_rx.try_recv() {
-                    global_state.player = Some(player);
+                ui.add_space(20.);
+
+                if ui.button("prev frame").is_pointer_button_down_on() {
+                    player.ctrl.send(PlayerRequest::PreviousFrame).unwrap();
                 }
+                egui::ComboBox::from_label("tracks").show_ui(ui, |ui| {
+                    for track in &mut player.player.metadata.tracks {
+                        use crate::player::container::{
+                            Track, TrackKind,
+                            track::{Audio, Video},
+                        };
+                        let text = match track {
+                            TrackKind::Audio(_) => format!("Audio"),
+                            TrackKind::Video(Track {
+                                kind: Video { width, height },
+                                ..
+                            }) => format!("{width}x{height} Video"),
+                        };
 
-                if let Some(player) = global_state.player.as_mut() {
-                    if ui.button("next frame").is_pointer_button_down_on() {
-                        player.ctrl.send(PlayerRequest::NextFrame).unwrap();
-                    }
+                        let (selected, id) = match track {
+                            TrackKind::Audio(Track { selected, id, .. }) => (selected, *id),
+                            TrackKind::Video(Track { selected, id, .. }) => (selected, *id),
+                        };
+                        if ui.checkbox(selected, text).clicked() {
+                            if !global_state.inflight_tracks.contains(&id) {
+                                global_state.inflight_tracks.insert(id);
 
-                    ui.add_space(20.);
-
-                    if ui.button("prev frame").is_pointer_button_down_on() {
-                        player.ctrl.send(PlayerRequest::PreviousFrame).unwrap();
-                    }
-                    egui::ComboBox::from_label("tracks")
-                        .show_ui(ui, |ui| {
-                            for track in &mut player.player.metadata.tracks {
-                                use crate::player::container::{TrackKind, Track, track::{Audio, Video}};
-                                let text = match track {
-                                    TrackKind::Audio(_) => format!("Audio"),
-                                    TrackKind::Video(Track { kind: Video { width, height}, .. }) => format!("{width}x{height} Video"),
-                                };
-
-                                let (selected, id) = match track {
-                                    TrackKind::Audio(Track { selected, id, ..}) => (selected, *id),
-                                    TrackKind::Video(Track { selected, id, ..}) => (selected, *id),
-                                };
-                                if ui.checkbox(selected, text).clicked() {
-                                    if !global_state.inflight_tracks.contains(&id) {
-                                        global_state.inflight_tracks.insert(id);
-
-                                        if *selected {
-                                            player.track_reqs.send(TrackRequest::Listen(track.clone()));
-                                        } else {
-                                            player.track_reqs.send(TrackRequest::Close(id));
-                                        }
-                                    }
+                                if *selected {
+                                    player.track_reqs.send(TrackRequest::Listen(track.clone()));
+                                } else {
+                                    player.track_reqs.send(TrackRequest::Close(id));
                                 }
                             }
-                        });
-
-                    while let Ok((video, video_track)) = player.video_tracks.try_recv() {
-                        global_state.inflight_tracks.remove(&video.id);
-                        if let Some(video_track) = video_track {
-                            let display = DisplayedVideoTrack::from_egui(
-                                video.kind.width, 
-                                video.kind.height, 
-                                video_track.recv, 
-                                player.player.shutdown_token(),
-                                video_track.track_cancelled,
-                                &wgpu.device,
-                                wgpu.queue.clone(),
-                                proxy,
-                                renderer,
-                                &global_state.rt,
-                            );
-                            player.opened_video_tracks.push((video, display));
                         }
                     }
-                    while let Ok((audio, _)) = player.audio_tracks.try_recv() {
-                        global_state.inflight_tracks.remove(&audio.id);
-                        // TODO: audio
-                    }
+                });
 
-                    while let Ok((id, _)) = player.closed_tracks.try_recv() {
-                        global_state.inflight_tracks.remove(&id);
-                    }
-
-
-                    let playing = player.player.play_state();
-                    use crate::player::PlayState;
-                    let text = match playing {
-                        PlayState::Playing => "pause",
-                        PlayState::Paused => "play",
-                    };
-                    let playing = matches!(playing, crate::player::PlayState::Playing);
-
-                    let playback_speed = 1.0;
-                    
-                    if ui.button(text).clicked() {
-                        if playing {
-                            player.ctrl.send(PlayerRequest::Pause).unwrap();
-                        } else {
-                            player.ctrl.send(PlayerRequest::Play(playback_speed)).unwrap();
-                        }
-                    }
-
-                    for (video, display) in &player.opened_video_tracks {
-                        ui.image((display.id, egui::Vec2::new(video.kind.width as f32, video.kind.height as f32)));
-                    }
-
-                    let mut current_time = player.player.time().as_secs_f64();
-                    let total = player.player.metadata.duration.as_secs_f64();
-
-                    let mut seek_time = 0.;
-                    let timeline = egui_timeline_widget::Timeline::new(current_time, total, &mut seek_time);
-                    let res = ui.add(timeline);
-
-                    if res.is_pointer_button_down_on() || res.clicked() || res.drag_stopped() {
-                        let seek_state = PlayerRequest::Position(core::time::Duration::from_secs_f64(seek_time));
-                        // when dragged, want to seek to stop playing then seek to position,
-                        // when clicked/stop dragging, want to seek to the position then start
-                        // playing
-
-                        if res.is_pointer_button_down_on() {
-                            if player.was_playing_before_drag.is_none() {
-                               player.was_playing_before_drag = Some(playing);
-                            }
-                            let play_state = PlayerRequest::Pause;
-                            player.ctrl.send(play_state).unwrap();
-                            player.ctrl.send(seek_state).unwrap();
-                        } else {
-                            player.ctrl.send(seek_state).unwrap();
-
-                            let play_state = if player.was_playing_before_drag.unwrap_or(false) {
-                                PlayerRequest::Play(playback_speed)
-                            } else {
-                                PlayerRequest::Pause
-                            };
-                            player.was_playing_before_drag = None;
-                            player.ctrl.send(play_state).unwrap();
-                        }
+                while let Ok((video, video_track)) = player.video_tracks.try_recv() {
+                    global_state.inflight_tracks.remove(&video.id);
+                    if let Some(video_track) = video_track {
+                        let display = DisplayedVideoTrack::from_egui(
+                            video.kind.width,
+                            video.kind.height,
+                            video_track.recv,
+                            player.player.shutdown_token(),
+                            video_track.track_cancelled,
+                            &wgpu.device,
+                            wgpu.queue.clone(),
+                            proxy,
+                            renderer,
+                            &global_state.rt,
+                        );
+                        player.opened_video_tracks.push((video, display));
                     }
                 }
-            });
+                while let Ok((audio, _)) = player.audio_tracks.try_recv() {
+                    global_state.inflight_tracks.remove(&audio.id);
+                    // TODO: audio
+                }
+
+                while let Ok((id, _)) = player.closed_tracks.try_recv() {
+                    global_state.inflight_tracks.remove(&id);
+                }
+
+                let playing = player.player.play_state();
+                use crate::player::PlayState;
+                let text = match playing {
+                    PlayState::Playing => "pause",
+                    PlayState::Paused => "play",
+                };
+                let playing = matches!(playing, crate::player::PlayState::Playing);
+
+                let playback_speed = 1.0;
+
+                if ui.button(text).clicked() {
+                    if playing {
+                        player.ctrl.send(PlayerRequest::Pause).unwrap();
+                    } else {
+                        player
+                            .ctrl
+                            .send(PlayerRequest::Play(playback_speed))
+                            .unwrap();
+                    }
+                }
+
+                for (video, display) in &player.opened_video_tracks {
+                    ui.image((
+                        display.id,
+                        egui::Vec2::new(video.kind.width as f32, video.kind.height as f32),
+                    ));
+                }
+
+                let mut current_time = player.player.time().as_secs_f64();
+                let total = player.player.metadata.duration.as_secs_f64();
+
+                let mut seek_time = 0.;
+                let timeline =
+                    egui_timeline_widget::Timeline::new(current_time, total, &mut seek_time);
+                let res = ui.add(timeline);
+
+                if res.is_pointer_button_down_on() || res.clicked() || res.drag_stopped() {
+                    let seek_state =
+                        PlayerRequest::Position(core::time::Duration::from_secs_f64(seek_time));
+                    // when dragged, want to seek to stop playing then seek to position,
+                    // when clicked/stop dragging, want to seek to the position then start
+                    // playing
+
+                    if res.is_pointer_button_down_on() {
+                        if player.was_playing_before_drag.is_none() {
+                            player.was_playing_before_drag = Some(playing);
+                        }
+                        let play_state = PlayerRequest::Pause;
+                        player.ctrl.send(play_state).unwrap();
+                        player.ctrl.send(seek_state).unwrap();
+                    } else {
+                        player.ctrl.send(seek_state).unwrap();
+
+                        let play_state = if player.was_playing_before_drag.unwrap_or(false) {
+                            PlayerRequest::Play(playback_speed)
+                        } else {
+                            PlayerRequest::Pause
+                        };
+                        player.was_playing_before_drag = None;
+                        player.ctrl.send(play_state).unwrap();
+                    }
+                }
+            }
+        });
 
         None
     }
@@ -360,6 +367,4 @@ impl WindowState {
     }
 }
 
-pub enum UiRequest {
-
-}
+pub enum UiRequest {}
