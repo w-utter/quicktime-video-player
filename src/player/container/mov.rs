@@ -73,9 +73,7 @@ pub async fn container_task(path: &std::path::Path, state: Arc<PlayerState>, con
                                     }
                                     let offset = track.track.sample_to_chunk.get_frame_offset_async(next.id, &track.track.chunk_offset, &track.track.sample_size, &mut reader, &opts).await.unwrap();
                                     let extent = data.from_offset_32(offset).unwrap();
-                                    use atom_parser::AsyncReader;
-                                    let frame = reader.async_read_bytes(extent).await.unwrap();
-                                    handle.raw_frame_in.send((frame, next.id)).await.unwrap();
+                                    handle.raw_frame_in.send((extent, next.id)).await.unwrap();
                                 }
                             } else {
                                 if let Some(current_dur) = &requested_time {
@@ -135,16 +133,15 @@ pub async fn container_task(path: &std::path::Path, state: Arc<PlayerState>, con
                                         TrackResponse::AlreadyOpen(id)
                                     } else {
                                         if let Some(track) = track_map.get_mut(&id) {
-                                            match create_codec_task_from_track(&track.track, tx, shutdown.clone()) {
+                                            let r = reader.clone();
+                                            match create_codec_task_from_track(&track.track, r, tx, shutdown.clone()) {
                                                 Ok(handle) => {
                                                     track.next = track.track.get_current_frame_info_from_time(&current_time, &mut reader, &opts, &header).await.unwrap();
 
                                                     if let Some(current) = track.next.as_ref() {
                                                         let offset = track.track.sample_to_chunk.get_frame_offset_async(current.id, &track.track.chunk_offset, &track.track.sample_size, &mut reader, &opts).await.unwrap();
                                                         let extent = data.from_offset_32(offset).unwrap();
-                                                        use atom_parser::AsyncReader;
-                                                        let frame = reader.async_read_bytes(extent).await.unwrap();
-                                                        handle.raw_frame_in.send((frame, current.id)).await.unwrap();
+                                                        handle.raw_frame_in.send((extent, current.id)).await.unwrap();
                                                     }
                                                     //track.next = next_frame;
                                                     open_track_map.insert(id, handle);
@@ -231,9 +228,7 @@ pub async fn container_task(path: &std::path::Path, state: Arc<PlayerState>, con
                                                     if let Some(current) = track.next.as_ref() {
                                                         let offset = track.track.sample_to_chunk.get_frame_offset_async(current.id, &track.track.chunk_offset, &track.track.sample_size, &mut reader, &opts).await.unwrap();
                                                         let extent = data.from_offset_32(offset).unwrap();
-                                                        use atom_parser::AsyncReader;
-                                                        let frame = reader.async_read_bytes(extent).await.unwrap();
-                                                        handle.raw_frame_in.send((frame, current.id)).await.unwrap();
+                                                        handle.raw_frame_in.send((extent, current.id)).await.unwrap();
                                                     }
                                                 }
                                             }
@@ -272,7 +267,7 @@ pub async fn container_task(path: &std::path::Path, state: Arc<PlayerState>, con
 
 struct CodecTaskHandle {
     display_out: tokio::sync::mpsc::Sender<super::DisplayBuffer>,
-    raw_frame_in: tokio::sync::mpsc::Sender<(Box<[u8]>, u32)>,
+    raw_frame_in: tokio::sync::mpsc::Sender<(atom_parser::Extent<u64, u64>, u32)>,
     decoded_frame_out: tokio::sync::mpsc::Receiver<(Box<[u8]>, u32)>,
     codec_cancel_token: tokio_util::sync::CancellationToken,
     frame_buffer: std::collections::BTreeMap<u32, Box<[u8]>>,
@@ -298,7 +293,7 @@ impl Drop for CodecTaskHandle {
 //          - audio
 //              - raw
 //              - opus
-fn create_codec_task_from_track<O>(track: &Track<O>, display_out: tokio::sync::mpsc::Sender<super::DisplayBuffer>, shutdown: tokio_util::sync::CancellationToken) -> Result<CodecTaskHandle, UnsupportedTrackError> {
+fn create_codec_task_from_track<O>(track: &Track<O>, mut reader: atom_parser::AsyncFileReader<Arc<std::fs::File>, BUFFER_SIZE>, display_out: tokio::sync::mpsc::Sender<super::DisplayBuffer>, shutdown: tokio_util::sync::CancellationToken) -> Result<CodecTaskHandle, UnsupportedTrackError> {
     use quicktime_2001::{TrackKind, AudioTrack, VideoTrack};
     Ok(match &track.kind {
         TrackKind::Audio(AudioTrack { entries }) => {
@@ -328,7 +323,9 @@ fn create_codec_task_from_track<O>(track: &Track<O>, display_out: tokio::sync::m
                                         break;
                                     };
 
-                                    let frame: Box<[u8]> = frame;
+                                    let frame_extent: atom_parser::Extent<u64, u64> = frame;
+                                    use atom_parser::AsyncReader;
+                                    let frame = reader.async_read_bytes(frame_extent).await.unwrap();
                                     let (pixels, _) = frame.as_chunks::<3>();
                                     let mut premul_output = Vec::with_capacity(frame.len() * 4 / 3);
                                     for [r, g, b] in pixels {
@@ -471,9 +468,16 @@ struct ActiveTrack<O> {
 
 // each track could have a 'next display frame'
 
+const BUFFER_SIZE: usize = 1024;
+
 // TODO: this should also return the tracks stuff as well
-async fn parse_metadata(path: &std::path::Path) -> (atom_parser::InMemoryReader<'static>, MovVideo<usize>, Metadata, (tokio::sync::mpsc::Receiver<TrackAction>, tokio::sync::mpsc::Sender<TrackResponse>)) {
-    let mut r = atom_parser::InMemoryReader::from_path(path).unwrap();
+async fn parse_metadata(path: &std::path::Path) -> (atom_parser::AsyncFileReader<std::sync::Arc<std::fs::File>, BUFFER_SIZE>, MovVideo<u64>, Metadata, (tokio::sync::mpsc::Receiver<TrackAction>, tokio::sync::mpsc::Sender<TrackResponse>)) {
+    let mut r = {
+        let file = tokio::fs::File::open(path).await.unwrap();
+        let size = file.metadata().await.unwrap().len();
+        let file = std::sync::Arc::new(file.into_std().await);
+        atom_parser::reader::AsyncFileReader::<_, BUFFER_SIZE>::new(file, size)
+    };
     let opts = Default::default();
 
     use atom_parser::AsyncParse;
